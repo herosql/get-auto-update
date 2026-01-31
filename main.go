@@ -1,7 +1,9 @@
 package main
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,6 +27,12 @@ func main() {
 
 	fileSuffix := ".zip"
 
+	isWindows := strings.Contains(local.Os, "windows")
+
+	if !isWindows {
+		fileSuffix = ".tar.gz"
+	}
+
 	downloadUrl := "https://dl.google.com/go/" + local.Version + "." + officialTargetOs + fileSuffix
 
 	installDir, _ := GetInstallDir()
@@ -35,9 +43,78 @@ func main() {
 
 	DownloadFile(downloadUrl, filePath)
 
-	UnzipWithPrefix(filePath, "go", installDir)
+	if !isWindows {
+		UncompressTarGz(filePath, "go", installDir)
+	} else {
+		UnzipWithPrefix(filePath, "go", installDir)
+	}
 
 	DeleteFile(filePath)
+}
+
+func UncompressTarGz(srcFilePath, targetFolder, dest string) error {
+	f, err := os.Open(srcFilePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	gzReader, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gzReader.Close()
+
+	tarReader := tar.NewReader(gzReader)
+
+	targetFolder = filepath.ToSlash(targetFolder)
+	if !strings.HasSuffix(targetFolder, "/") {
+		targetFolder += "/"
+	}
+
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		headerName := filepath.ToSlash(header.Name)
+		if !strings.HasPrefix(headerName, targetFolder) {
+			continue
+		}
+
+		relPath := strings.TrimPrefix(headerName, targetFolder)
+		if relPath == "" {
+			continue
+		}
+
+		targetPath := filepath.Join(dest, relPath)
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(targetPath, 0755); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+				return err
+			}
+
+			outFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.FileMode(header.Mode))
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(outFile, tarReader); err != nil {
+				outFile.Close()
+				return err
+			}
+			outFile.Close()
+		}
+	}
+	return nil
 }
 
 func UnzipWithPrefix(zipPath, targetFolder, dest string) error {
