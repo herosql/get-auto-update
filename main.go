@@ -23,6 +23,7 @@ func main() {
 
 	if local.Version == official {
 		fmt.Println("It is now the latest version.")
+		return
 	}
 
 	fileSuffix := ".zip"
