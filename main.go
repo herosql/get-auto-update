@@ -4,9 +4,11 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -14,16 +16,40 @@ import (
 	"strings"
 )
 
-func main() {
-	local, _ := GetVersion()
+func LogAndPrint(level slog.Level, msg string, args ...any) {
+	slog.Default().Log(context.Background(), level, msg, args...)
 
-	official, _ := GetLatestVersion()
+	if level >= slog.LevelInfo {
+		if level == slog.LevelError {
+			LogAndPrint(slog.LevelError, "Error: %s\n", msg)
+		} else {
+			fmt.Printf("➜ %s\n", msg)
+		}
+	}
+}
+
+func main() {
+	local, err := GetVersion()
+
+	if err != nil {
+		LogAndPrint(slog.LevelError, "get version err：%s\n", err)
+		os.Exit(1)
+	}
+
+	LogAndPrint(slog.LevelInfo, "local current version:%s\n", local.Version)
+
+	official, err := GetLatestVersion()
+	if err != nil {
+		LogAndPrint(slog.LevelError, "GetLatestVersion err：%s\n", err)
+	}
+
+	LogAndPrint(slog.LevelInfo, "latest release:%s\n", official)
 
 	officialTargetOs := strings.Replace(local.Os, "/", "-", 1)
 
 	if local.Version == official {
-		fmt.Println("It is now the latest version.")
-		return
+		LogAndPrint(slog.LevelInfo, "It is now the latest version.")
+		os.Exit(1)
 	}
 
 	fileSuffix := ".zip"
@@ -38,19 +64,48 @@ func main() {
 
 	installDir, _ := GetInstallDir()
 
-	Clean(installDir)
+	LogAndPrint(slog.LevelInfo, "clean up old versions.\n")
+
+	err = Clean(installDir)
+
+	if err != nil {
+		LogAndPrint(slog.LevelError, "clean error：%s\n", err)
+		os.Exit(1)
+	}
 
 	filePath := installDir + `\` + local.Version + fileSuffix
 
-	DownloadFile(downloadUrl, filePath)
+	LogAndPrint(slog.LevelInfo, "download the latest version.\n")
 
-	if !isWindows {
-		UncompressTarGz(filePath, "go", installDir)
-	} else {
-		UnzipWithPrefix(filePath, "go", installDir)
+	err = DownloadFile(downloadUrl, filePath)
+
+	if err != nil {
+		LogAndPrint(slog.LevelError, "donload error:%s\n", err)
+		os.Exit(1)
 	}
 
-	DeleteFile(filePath)
+	if !isWindows {
+		err = UncompressTarGz(filePath, "go", installDir)
+		if err != nil {
+			LogAndPrint(slog.LevelError, "UncompressTarGz error:%s\n", err)
+			os.Exit(1)
+		}
+	} else {
+		err = UnzipWithPrefix(filePath, "go", installDir)
+
+		if err != nil {
+			LogAndPrint(slog.LevelError, "UnzipWithPrefix error:%s\n", err)
+			os.Exit(1)
+		}
+	}
+
+	LogAndPrint(slog.LevelInfo, "clean up downloaded files.\n")
+	err = DeleteFile(filePath)
+
+	if err != nil {
+		LogAndPrint(slog.LevelError, "DeleteFile error:%s\n", err)
+		os.Exit(1)
+	}
 }
 
 func UncompressTarGz(srcFilePath, targetFolder, dest string) error {
